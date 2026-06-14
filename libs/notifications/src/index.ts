@@ -1,2 +1,8 @@
 export * from './notifications.module';
-export * from './notifications.service';
+
+export * from './dtos/create-notification.dto';
+
+export * from './models/notification.model';
+
+export * from './enums/notification-channel.enum';
+export * from './enums/notification-status.enum';
