@@ -16,9 +16,9 @@ export class NotificationConsumer implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.kafkaConsumerService.consume<NotificationModel>(
       KafkaTopics.NOTIFICATIONS,
-      async (notification) => {
+      async (notification, metadata) => {
         this.logger.log(
-          `[NOTIFICATION CONSUMER] Consumed notificationId=${notification.id}`,
+          `[NOTIFICATION CONSUMER] Consumed notificationId=${notification.id} topic=${metadata.topic} offset=${metadata.offset}`,
         );
 
         this.logger.log(
