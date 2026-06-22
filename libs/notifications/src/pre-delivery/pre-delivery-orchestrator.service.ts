@@ -1,124 +1,76 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { NotificationChannel } from '../enums/notification-channel.enum';
-import { KafkaService } from '../kafka/kafka.service';
-import { KafkaTopics } from '../kafka/kafka-topics';
 import { NotificationModel } from '../models/notification.model';
+import { DeliveryRoutingService } from './services/delivery-routing.service';
+import { MockUserValidationService } from './services/mock-user-validation.service';
+import {
+  PreDeliveryDecision,
+  PreDeliveryRejectionReason,
+} from './types/pre-delivery-decision.type';
 
 @Injectable()
 export class PreDeliveryOrchestratorService {
   private readonly logger = new Logger(PreDeliveryOrchestratorService.name);
 
-  constructor(private readonly kafkaService: KafkaService) {}
+  constructor(
+    private readonly mockUserValidationService: MockUserValidationService,
+    private readonly deliveryRoutingService: DeliveryRoutingService,
+  ) {}
 
   async handle(notification: NotificationModel): Promise<void> {
-    this.logger.log(`[PRE-DELIVERY] Start notificationId=${notification.id}`);
+    this.logger.log(
+      `[PRE-DELIVERY] Start notificationId=${notification.id} userId=${notification.userId} appId=${notification.appId} type=${notification.type}`,
+    );
 
-    const isUserValid = this.validateUser(notification);
+    const channelsDecision = this.validateChannels(notification);
 
-    if (!isUserValid) {
-      this.logger.warn(
-        `[PRE-DELIVERY] Rejected notificationId=${notification.id} reason=INVALID_USER`,
-      );
+    if (!channelsDecision.accepted) {
+      this.reject(notification, channelsDecision);
       return;
     }
 
-    const digestAllowed = this.checkDigest(notification);
+    const userDecision = this.mockUserValidationService.validate(notification);
 
-    if (!digestAllowed) {
-      this.logger.warn(
-        `[PRE-DELIVERY] Rejected notificationId=${notification.id} reason=DIGEST_NOT_READY`,
-      );
+    if (!userDecision.accepted) {
+      this.reject(notification, userDecision);
       return;
     }
 
-    const bombardmentAllowed = this.checkBombardment(notification);
+    await this.deliveryRoutingService.route(notification);
 
-    if (!bombardmentAllowed) {
-      this.logger.warn(
-        `[PRE-DELIVERY] Rejected notificationId=${notification.id} reason=BOMBARDMENT_LIMIT_EXCEEDED`,
-      );
-      return;
-    }
-
-    await this.routeDeliveryTopics(notification);
-
-    this.logger.log(`[PRE-DELIVERY] Completed notificationId=${notification.id}`);
+    this.logger.log(
+      `[PRE-DELIVERY] Completed notificationId=${notification.id}`,
+    );
   }
 
-  private validateUser(notification: NotificationModel): boolean {
-    if (!notification.userId) {
-      this.logger.warn('[PRE-DELIVERY] User validation failed: missing userId');
-      return false;
-    }
-
-    if (notification.userId === 'blocked') {
-      this.logger.warn(
-        `[PRE-DELIVERY] User validation failed userId=${notification.userId}`,
-      );
-      return false;
+  private validateChannels(notification: NotificationModel): PreDeliveryDecision {
+    if (
+      !Array.isArray(notification.channels) ||
+      notification.channels.length === 0
+    ) {
+      return {
+        accepted: false,
+        reason: PreDeliveryRejectionReason.NO_CHANNELS,
+        message: 'Notification has no delivery channels',
+      };
     }
 
     this.logger.log(
-      `[PRE-DELIVERY] User validation passed userId=${notification.userId}`,
+      `[PRE-DELIVERY] Channels validation passed channels=${notification.channels.join(
+        ',',
+      )}`,
     );
 
-    return true;
+    return {
+      accepted: true,
+    };
   }
 
-  private checkDigest(notification: NotificationModel): boolean {
-    this.logger.log(
-      `[PRE-DELIVERY] Digest check passed notificationId=${notification.id}`,
-    );
-
-    return true;
-  }
-
-  private checkBombardment(notification: NotificationModel): boolean {
-    const simulateBombardment =
-      notification.data &&
-      typeof notification.data === 'object' &&
-      'simulateBombardment' in notification.data &&
-      notification.data.simulateBombardment === true;
-
-    if (simulateBombardment) {
-      this.logger.warn(
-        `[PRE-DELIVERY] Bombardment check failed notificationId=${notification.id}`,
-      );
-      return false;
-    }
-
-    this.logger.log(
-      `[PRE-DELIVERY] Bombardment check passed notificationId=${notification.id}`,
-    );
-
-    return true;
-  }
-
-  private async routeDeliveryTopics(
+  private reject(
     notification: NotificationModel,
-  ): Promise<void> {
-    if (notification.channels.includes(NotificationChannel.IN_APP)) {
-      this.logger.log(
-        `[PRE-DELIVERY] Routing channel=IN_APP topic=${KafkaTopics.NOTIFICATIONS_IN_APP}`,
-      );
-
-      await this.kafkaService.emit(
-        KafkaTopics.NOTIFICATIONS_IN_APP,
-        notification,
-        notification.userId,
-      );
-    }
-
-    if (notification.channels.includes(NotificationChannel.EMAIL)) {
-      this.logger.log(
-        `[PRE-DELIVERY] Routing channel=EMAIL topic=${KafkaTopics.NOTIFICATIONS_EMAIL}`,
-      );
-
-      await this.kafkaService.emit(
-        KafkaTopics.NOTIFICATIONS_EMAIL,
-        notification,
-        notification.userId,
-      );
-    }
+    decision: PreDeliveryDecision,
+  ): void {
+    this.logger.warn(
+      `[PRE-DELIVERY] Rejected notificationId=${notification.id} reason=${decision.reason} message=${decision.message ?? 'none'}`,
+    );
   }
 }

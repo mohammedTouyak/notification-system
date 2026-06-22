@@ -35,6 +35,11 @@ export class SendNotificationService {
       KafkaTopics.NOTIFICATIONS,
       notification,
       notification.userId,
+      {
+        eventType: notification.type,
+        appId: notification.appId,
+        source: 'notification-library',
+      },
     );
 
     // NB: pourquoi utiliser key = userId ? 
